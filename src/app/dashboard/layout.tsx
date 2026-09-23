@@ -1,24 +1,17 @@
 import { AppSidebar } from "@/components/ui/layout/app-sidebar";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { ReactNode } from "react";
+import ChatbotDrawer from "./_components/chatbot-drawer";
 
-export default function DashboardLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
-        <header className="flex items-center gap-2 p-2">
-          <SidebarTrigger />
-        </header>
-        <div className="flex-1">{children}</div>
-      </SidebarInset>
+      <main className="flex-1 p-4">
+        <SidebarTrigger />
+        {children}
+        <ChatbotDrawer />
+      </main>
     </SidebarProvider>
   );
 }
