@@ -136,6 +136,10 @@
     @apply w-full my-2 text-wrap;
   }
 
+  div {
+    @apply max-w-full;
+  }
+
   h1,
   h2,
   h3,

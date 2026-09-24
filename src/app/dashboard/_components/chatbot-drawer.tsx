@@ -11,33 +11,115 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
-import { handleChat } from "@/features/ai/chat";
+import { handleChat, handleChatStreaming } from "@/features/ai/chat";
 import { cn } from "@/lib/utils";
-import { BotIcon, EllipsisIcon, XIcon } from "lucide-react";
+import { BotIcon, ChevronDownIcon, EllipsisIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ChatbotTextarea from "./chatbot-textarea";
 import { useMutation } from "@tanstack/react-query";
 import Markdown from "react-markdown";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Conversation } from "@/app/types/ai";
 
 export default function ChatbotDrawer() {
   const chatRef = useRef<HTMLDivElement>(null);
-  const [conversation, setConversation] = useState<
-    {
-      role: string;
-      parts: {
-        text: string;
-      }[];
-    }[]
-  >([]);
+  const [conversation, setConversation] = useState<Conversation[]>([]);
+  const [isThinking, setIsThinking] = useState<boolean>(false);
+
+  // const { mutate: handleChatMutation, isPending } = useMutation({
+  //   mutationFn: ({
+  //     isThinking,
+  //   }: {
+  //     isThinking: boolean;
+  //   }) => handleChat(conversation, isThinking),
+  //   onSuccess: (response) => {
+  //     let parts: {
+  //       text: string;
+  //       thought?: boolean;
+  //     }[] = [];
+
+  //     if (response?.thought !== '') {
+  //       parts = [
+  //         ...parts,
+  //         { thought: true, text: response?.thought || 'Terjadi kesalahan' },
+  //       ];
+  //     }
+  //     const botMessage = {
+  //       role: 'model',
+  //       parts: [...parts, { text: response?.answer || 'Terjadi kesalahan' }],
+  //     };
+  //     setConversation((prev) => [...prev, botMessage]);
+  //   },
+  //   onError: (error) => {
+  //     const botMessage = {
+  //       role: 'model',
+  //       parts: [{ text: 'Terjadi kesalahan: ' + error.message }],
+  //     };
+  //     setConversation((prev) => [...prev, botMessage]);
+  //   },
+  // });
 
   const { mutate: handleChatMutation, isPending } = useMutation({
-    mutationFn: handleChat,
-    onSuccess: (response) => {
-      const botMessage = {
-        role: "model",
-        parts: [{ text: response || "Terjadi kesalahan" }],
-      };
-      setConversation((prev) => [...prev, botMessage]);
+    mutationFn: async ({ isThinking }: { isThinking: boolean }) => {
+      if (isThinking) {
+        setConversation((prev) => [
+          ...prev,
+          { role: "model", parts: [{ thought: true, text: "" }, { text: "" }] },
+        ]);
+        const response = await handleChatStreaming(conversation, isThinking);
+        for await (const chunk of response) {
+          setConversation((prev) => {
+            const newConversation = [...prev];
+            const lastIndex = newConversation.length - 1;
+
+            const parts = newConversation[lastIndex].parts;
+
+            newConversation[lastIndex] = {
+              ...newConversation[lastIndex],
+              parts: [
+                {
+                  ...parts[0],
+                  text: chunk.startsWith("[thought]")
+                    ? parts[0].text + chunk.replace("[thought]", "")
+                    : parts[0].text,
+                },
+                {
+                  text: !chunk.startsWith("[thought]")
+                    ? parts[1].text + chunk
+                    : parts[1].text,
+                },
+              ],
+            };
+            return newConversation;
+          });
+        }
+        return response;
+      } else {
+        setConversation((prev) => [
+          ...prev,
+          { role: "model", parts: [{ text: "" }] },
+        ]);
+        const response = await handleChatStreaming(conversation, isThinking);
+        for await (const chunk of response) {
+          setConversation((prev) => {
+            const newConversation = [...prev];
+            const lastIndex = newConversation.length - 1;
+
+            newConversation[lastIndex] = {
+              ...newConversation[lastIndex],
+              parts: [
+                { text: newConversation[lastIndex].parts[0].text + chunk },
+              ],
+            };
+            return newConversation;
+          });
+        }
+        return response;
+      }
     },
     onError: (error) => {
       const botMessage = {
@@ -54,7 +136,7 @@ export default function ChatbotDrawer() {
       parts: [{ text: message }],
     };
     setConversation((prev) => [...prev, newMessage]);
-    handleChatMutation(message);
+    handleChatMutation({ isThinking });
   }
 
   useEffect(() => {
@@ -121,7 +203,27 @@ export default function ChatbotDrawer() {
                     )}
                     {message.role === "model" ? (
                       <div className="response-ai">
-                        <Markdown>{message.parts[0].text}</Markdown>
+                        {message.parts.map((part, indexPart) => (
+                          <div key={`response-ai-${index}-${indexPart}`}>
+                            {part.thought ? (
+                              <Collapsible>
+                                <CollapsibleTrigger asChild>
+                                  <Button variant="ghost">
+                                    Tampilkan alur berpikir
+                                    <ChevronDownIcon />
+                                  </Button>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                  <div className="pl-2 ml-4 border-l">
+                                    <Markdown>{part.text}</Markdown>
+                                  </div>
+                                </CollapsibleContent>
+                              </Collapsible>
+                            ) : (
+                              <Markdown>{part.text}</Markdown>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       message.parts[0].text
@@ -143,7 +245,11 @@ export default function ChatbotDrawer() {
           )}
         </div>
         <DrawerFooter>
-          <ChatbotTextarea sendMessage={sendMessage} />
+          <ChatbotTextarea
+            isThinking={isThinking}
+            setIsThinking={setIsThinking}
+            sendMessage={sendMessage}
+          />
         </DrawerFooter>
       </DrawerContent>
     </Drawer>

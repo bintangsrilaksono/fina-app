@@ -1,5 +1,3 @@
-"use client";
-
 import {
   Card,
   CardDescription,
@@ -7,17 +5,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { getBalanceSummary } from "@/features/transaction/action";
 import { convertToIDR } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
 import { TrendingDownIcon, TrendingUpIcon, WalletIcon } from "lucide-react";
 
-export function BalanceCards() {
-  const { data, error } = useQuery({
-    queryKey: ["balance"],
-    queryFn: () => getBalanceSummary(),
-  });
-
+export function BalanceCards({
+  data,
+  error,
+}: {
+  data:
+    | { savings: number; totalIncome: number; totalExpense: number }
+    | undefined;
+  error: unknown;
+}) {
   if (error) {
     return (
       <div className="w-full p-4 text-sm border rounded-lg border-destructive/50 text-destructive bg-destructive/10">
@@ -27,14 +26,14 @@ export function BalanceCards() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 mb-8 md:grid-cols-3">
+    <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-primary">
             <WalletIcon className="size-4" />
             Savings
           </CardTitle>
-          <CardDescription className="text-2xl font-semibold text-secondary-foreground">
+          <CardDescription className="text-lg lg:text-2xl font-semibold text-secondary-foreground">
             {convertToIDR(Number(data?.savings || 0))}
           </CardDescription>
         </CardHeader>
@@ -46,7 +45,7 @@ export function BalanceCards() {
             <TrendingUpIcon className="size-4" />
             Incomes
           </CardTitle>
-          <CardDescription className="text-2xl font-semibold text-secondary-foreground">
+          <CardDescription className="text-lg lg:text-2xl font-semibold text-secondary-foreground">
             {convertToIDR(Number(data?.totalIncome || 0))}
           </CardDescription>
         </CardHeader>
@@ -58,7 +57,7 @@ export function BalanceCards() {
             <TrendingDownIcon className="size-4" />
             Expenses
           </CardTitle>
-          <CardDescription className="text-2xl font-semibold text-secondary-foreground">
+          <CardDescription className="text-lg lg:text-2xl font-semibold text-secondary-foreground">
             {convertToIDR(Number(data?.totalExpense || 0))}
           </CardDescription>
         </CardHeader>

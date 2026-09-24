@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
+import { Toggle } from "@/components/ui/toggle";
+import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { SendIcon } from "lucide-react";
-import { KeyboardEvent } from "react";
+import { BrainIcon, SendIcon } from "lucide-react";
+import { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { Controller, useForm } from "react-hook-form";
 import z from "zod";
 
@@ -12,8 +14,12 @@ const formSchema = z.object({
 
 export default function ChatbotTextarea({
   sendMessage,
+  isThinking,
+  setIsThinking,
 }: {
   sendMessage: (message: string) => void;
+  isThinking: boolean;
+  setIsThinking: Dispatch<SetStateAction<boolean>>;
 }) {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -54,8 +60,20 @@ export default function ChatbotTextarea({
           </Field>
         )}
       />
-      <div className="flex justify-between">
-        <div></div>
+      <div className="flex items-center justify-between">
+        <div>
+          <Toggle
+            size="sm"
+            variant="outline"
+            pressed={isThinking}
+            onPressedChange={setIsThinking}
+            className={cn("text-xs px-0 py-0 h-8 w-8", {
+              "bg-primary/10!": isThinking,
+            })}
+          >
+            <BrainIcon className="size-4" />
+          </Toggle>
+        </div>
         <div>
           <Button
             type="submit"
