@@ -2,6 +2,7 @@
 
 import { Transaction } from "@/app/types/transaction";
 import { createClient } from "@/lib/supabase/server";
+import { generateEmbedding } from "../ai/embedding";
 
 export async function getBalanceSummary() {
   const supabase = await createClient();
@@ -41,7 +42,10 @@ export async function getTransactions(params?: {
     .select("id, amount, type, description, date, category", {
       count: "exact",
     })
-    .order("date");
+    .order("date")
+    .order("created_at", {
+      ascending: true,
+    });
 
   if (search) {
     query = query.ilike("description", `%${search}%`);
@@ -63,10 +67,30 @@ export async function getTransactions(params?: {
   };
 }
 
+async function handleEmbedding(
+  transaction: Omit<Transaction, "id" | "user_id" | "embedding">,
+) {
+  const embeddingText = JSON.stringify(transaction);
+
+  let embeddingVector: number[] | null = null;
+
+  try {
+    embeddingVector = await generateEmbedding(embeddingText);
+  } catch (error) {
+    throw new Error("Failed to generate embedding");
+  }
+
+  return embeddingVector;
+}
+
 export async function createTransaction(
-  payload: Omit<Transaction, "id" | "user_id" | "embedding">,
+  transaction: Omit<Transaction, "id" | "user_id" | "embedding">,
 ) {
   const supabase = await createClient();
+  const payload: Record<string, unknown> = { ...transaction };
+  const embeddingVector = await handleEmbedding(transaction);
+  if (embeddingVector) payload.embedding = embeddingVector;
+
   const { data, error } = await supabase.from("transactions").insert(payload);
 
   if (error) throw new Error(error.message);
@@ -87,9 +111,13 @@ export async function deleteTransaction(id: string) {
 
 export async function updateTransaction(
   id: string,
-  payload: Omit<Transaction, "id" | "user_id" | "embedding">,
+  transaction: Omit<Transaction, "id" | "user_id" | "embedding">,
 ) {
   const supabase = await createClient();
+  const payload: Record<string, unknown> = { ...transaction };
+  const embeddingVector = await handleEmbedding(transaction);
+  if (embeddingVector) payload.embedding = embeddingVector;
+
   const { data, error } = await supabase
     .from("transactions")
     .update(payload)
