@@ -1,193 +1,293 @@
 "use server";
 
-import z from "zod";
+import { Conversation } from "@/app/types/ai";
 import { createAI } from "./instance";
-import { FunctionDeclaration, Type } from "@google/genai";
-import { createTransaction, deleteTransaction } from "../transaction/action";
-import { findEmbedding } from "./embedding";
+import { findEmbedding, generateEmbedding } from "./embedding";
+import { Content, FunctionCall, Part } from "@google/genai";
+import { getTransactionDeclaration } from "./function-transaction";
 
-const transactionSchema = z.object({
-  amount: z.number().default(0).describe("Transaction nominal"),
-  type: z.enum(["income", "expense"]).describe("Type of transaction"),
-  category: z
-    .enum([
-      "Food & Drink",
-      "Shopping",
-      "Housing",
-      "Transportation",
-      "Entertainment",
-      "Salary",
-      "Others",
-    ])
-    .describe("Category of transaction"),
-  description: z.string().describe("Short text for describing transaction"),
-  date: z.string().describe("the date of transaction in YYYY-MM-DD format"),
-});
-
-export async function handleWizardInput(message: string) {
-  const contents = `
-  <role>
-    You are an AI Wizard finance assitant, who can extract transaction details from text.
-  </role>
-  <instruction>
-    Extract the transaction details from the following text and return it as a structure JSON object.
-    The JSON object must have exactly these fields:
-    - "amount": a number representing the cost (positive). Use 0 if not provided.
-    - "type": type of transaction, either 'income' or 'expense'.
-    - "category": choose the most appropriate category from this exact list:
-                  'Food & Drink','Shopping','Housing','Transportation','Entertainment','Salary','Others'.
-    - "description": a short string describing the transaction, first letter capitalized.
-    - "date": date of transaction in YYYY-MM-DD format.
-              Assume the current date if relative terms like 'today' or 'just now'. If not define use current date.
-  </instruction>
-  <context>
-    Current Date : ${new Date().toISOString()}
-  </context>
-  <input>
-    Text to extract: ${message}
-  </input>
-  <outputFormat>
-    Respond with only the raw JSON object, no markdown blocks, no text before or after.
-  </outputFormat>
-  `;
+export async function handleChat(
+  conversation: Conversation[],
+  isThinking: boolean,
+) {
   const ai = createAI();
   const response = await ai.models.generateContent({
     model: "gemini-3.5-flash",
-    contents,
+    contents: [...conversation],
     config: {
-      responseMimeType: "application/json",
-      responseSchema: z.toJSONSchema(transactionSchema),
+      thinkingConfig: {
+        includeThoughts: isThinking,
+      },
     },
   });
 
-  const transaction = transactionSchema.parse(JSON.parse(`${response.text}`));
-  if (transaction.amount <= 0) {
-    throw new Error("Cannot create transaction with invalid amount");
+  const result = {
+    thought: "",
+    answer: "",
+  };
+
+  if (isThinking) {
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (!parts) {
+      return;
+    }
+
+    for (const part of parts) {
+      if (!part.text) {
+        continue;
+      } else if (part.thought) {
+        result.thought += part.text;
+      } else {
+        result.answer += part.text;
+      }
+    }
+  } else {
+    result.answer = `${response.text}`;
   }
-
-  await createTransaction(transaction);
-
-  return "Create transaction success";
+  return result;
 }
 
-const transactionProperties = {
-  id: {
-    type: Type.STRING,
-    description: "The unique identifier of the transaction",
-  },
-  amount: {
-    type: Type.NUMBER,
-    description: "The amount of the transaction",
-  },
-  type: {
-    type: Type.STRING,
-    enum: ["income", "expense"],
-    description: 'The type of the transaction, either "income" or "expense"',
-  },
-  category: {
-    type: Type.STRING,
-    enum: [
-      "Food & Drink",
-      "Shopping",
-      "Housing",
-      "Transportation",
-      "Entertainment",
-      "Salary",
-      "Others",
-    ],
-    description: "The category of the transaction",
-  },
-  description: {
-    type: Type.STRING,
-    description:
-      "A brief description of the transaction, first letter capitalized",
-  },
-  date: {
-    type: Type.STRING,
-    description: 'The date of the transaction in the format "YYYY-MM-DD"',
-  },
-};
-
-const createTransactionDeclaration: FunctionDeclaration = {
-  name: "create_transaction",
-  description:
-    "Create a new transaction in the user's financial history based on the provided details.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: transactionProperties,
-    required: ["amount", "description", "type", "category", "date"],
-  },
-};
-
-const deleteTransactionDeclaration: FunctionDeclaration = {
-  name: "delete_transaction",
-  description:
-    "Delete an existing transaction from user's financial history based on the provided data.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: transactionProperties,
-  },
-};
-
-export async function handleWizardTools(message: string) {
-  const contents = `
-    <role>
-        You are an AI Wizard finance assitant, who can extract transaction details from text.
-    </role>
-    <instruction>
-        Extract the transaction details from the following text.
-    </instruction>
-    <context>
-        Current Date : ${new Date().toISOString()}
-    </context>
-    <input>
-        Text to extract: ${message}
-    </input>
-  `;
+async function generalChat(conversation: Content[], isThinking?: boolean) {
   const ai = createAI();
-  const response = await ai.models.generateContent({
-    model: "gemini-3.5-flash",
-    contents,
+  const response = await ai.models.generateContentStream({
+    model: "gemini-2.5-flash",
+    contents: [...conversation],
     config: {
+      thinkingConfig: {
+        includeThoughts: isThinking,
+        // thinkingLevel: isThinking ? ThinkingLevel.HIGH : ThinkingLevel.MINIMAL,
+        // thinkingBudget: isThinking ? -1 : 0,
+      },
       tools: [
         {
-          functionDeclarations: [
-            createTransactionDeclaration,
-            deleteTransactionDeclaration,
-          ],
+          googleSearch: {},
+          urlContext: {},
         },
       ],
+      systemInstruction: `
+      [Role]
+      Kamu adalah Finabot seorang financial advisor, yang punya gaya bahasa sopan dan suka
+      memberikan analogi sehari-hari agar penjelasan rumit jadi lebih mudah dipahami.
+
+      [Instruction]
+      - Jawab semua pertanyaan yang sesuai dengan bidang finance
+
+      [Context]
+      Kamu bekerja untuk Fina, platform financial tracker yang target utamanya adalah pengusaha di Indonesia (usia 18 - 30 tahun),
+      dengan penghasilan (Rp 30.000.000 - Rp 60.000.000). Kebanyakan dari mereka mulai memikirkan investasi.
+      
+      [Input]
+      Pengguna akan menanyakan seputar menabung, investasi, pengelolaan utang, dana darurat, keputusan membeli suatu barang/produk
+      dikaitkan dengan budget mereka, atau pertanyaan lain seputar finance.
+
+      [Constraints]
+      - Jawab dengan bahasa Indonesia yang santai, sopan namun tetap profesional.
+      - Jangan membuat asumsi tentang data dari pengguna jika mereka tidak menyebutkannya.
+      - Jika pengguna bertanya soal harga atau rekomendasi produk/barang (misal gadget, kendaraan) dikaitkan dengan budget atau
+        keputusan membeli, gunakan googleSearch/urlContext untuk mencari info harga terkini, lalu bantu analisis mana pilihan yang
+        paling sesuai dengan budget mereka. Ini termasuk bidang kamu karena berkaitan dengan keputusan finansial.
+      - Jika ada pertanyaan yang sama sekali tidak berkaitan dengan keuangan atau keputusan finansial (misal politik, hiburan umum,
+        kesehatan), maka kamu jawab bahwa kamu hanya bisa menjawab pertanyaan terkait finance.
+      
+      [Workflow Steps]
+      - Langkah 1 (Information Extraction): Identifikasi pengguna, tanyakan usia, penghasilan/ budget, tujuan keuangannya.
+      - Langkah 2 (Thought): Analisis masalah utama pengguna dan  data apa yang kurang.
+      - Langkah 3 (Action): Tentukan rencana yang harus dijalankan.
+      - Langkah 4 (Evaluation): Periksa kembali hasil dari action.
+      - Langkah 5 (Response Generation): Keluarkan jawaban akhir ke pengguna
+
+      [Response Format]
+      Struktur jawaban kamu harus seperti ini:
+      1. Analisis singkat masalah pengguna dalam 1 kalimat.
+      2. Langkah solusi.
+
+      [Example]
+      ikuti gaya jawaban dari contoh berikut:
+      [Contoh 1]
+      User: "Gaji saya 5 juta, gimana cara nabung dana darurat"
+      Model: "Mengumpulkan dana darurat dengan gaji 5 juta itu sangat mungkin asalkan konsisten.
+      Berikut langkah awalnya:
+      - Sisihkan minimal 10% di awal bulan.
+      - Simpan di instrumen rendah resiko seperti RDPU"
+
+      [Contoh 2]
+      User: "Mending bayar utang paylater atau mulai investasi"
+      Model: "Prioritas utama yang sehat adalah melunasi utang konsumtif dengan bunga tinggi.
+      Ini saran untukmu:
+      - Stop penggunaan paylater untuk sementara waktu.
+      - Dana berlebih pakai untuk melunasi paylater tersebut karena bunga jauh lebih tinggi dari imbal hasil investasi.
+      - Setelah lunas baru mulai rutin investasi
+
+      [Contoh 3]
+      User: "Saya punya budget 15 juta, mau beli iPhone apa rekomendasi kamu?"
+      Model: "Dengan budget 15 juta, ada beberapa pilihan iPhone yang worth it dan tetap menyisakan dana.
+      Berikut rekomendasinya (harga dicari lewat googleSearch/urlContext ke situs resmi seperti iBox):
+      - Sebutkan 2-3 pilihan model beserta harga terkini dan alasan singkat kenapa cocok dengan budget tersebut.
+      - Ingatkan agar tetap menyisihkan sebagian budget untuk kebutuhan darurat/tabungan, jangan habis semua untuk pembelian."
+      `,
+      // sampling params
+      temperature: 0.2,
+      topK: 5,
+      topP: 0.1,
+      // output control
+      maxOutputTokens: 2048,
+      stopSequences: ["\n\n\n", "###", "User:", "Pengguna:"],
+      // repetition penalties
+      // presencePenalty: 1.5,
+      // frequencyPenalty: 1.5,
     },
   });
 
-  if (response.functionCalls && response.functionCalls.length > 0) {
-    await Promise.all(
-      response.functionCalls.map(async (functionCall) => {
-        const args = functionCall.args;
-        if (!args) {
-          throw new Error("No arguments provided for action");
-        }
-        switch (functionCall.name) {
-          case "create_transaction":
-            const transaction = transactionSchema.parse(args);
-            if (transaction.amount <= 0) {
-              throw new Error("Cannot create transaction with invalid amount");
-            }
-            await createTransaction(transaction);
-            break;
-          case "delete_transaction":
-            const data = await findEmbedding(JSON.stringify(args), 0.3, 1);
-            const deletedData = data[0];
-            await deleteTransaction(deletedData.id);
-            break;
-          default:
-            throw new Error(`Unknown function call`);
-        }
-      }),
-    );
+  return response;
+}
 
-    return "Function executed successfully";
+export async function* handleChatStreaming(
+  conversation: Content[],
+  isThinking: boolean,
+  mode: "general" | "personal",
+) {
+  if (mode === "general") {
+    const response = await generalChat(conversation, isThinking);
+    if (isThinking) {
+      for await (const chunk of response) {
+        const parts = chunk.candidates?.[0]?.content?.parts;
+        if (parts) {
+          for (const part of parts) {
+            if (!part.text) {
+              continue;
+            } else if (part.thought) {
+              yield `[thought]${part.text}`;
+            } else {
+              yield part.text;
+            }
+          }
+        }
+      }
+    } else {
+      for await (const chunk of response) {
+        if (chunk.text) {
+          yield chunk.text;
+        }
+      }
+    }
   } else {
-    throw new Error("AI did not call any function");
+    const query = conversation[conversation.length - 1]?.parts?.[0].text;
+    const historyChat = conversation.slice(0, -1);
+    const ai = createAI();
+
+    const contents: Content[] = [
+      ...historyChat,
+      {
+        role: "user",
+        parts: [
+          {
+            text: `
+            <role>
+              You are an AI Financial Analyst. You are helping the user analyze their financial data.
+            </role>
+            <input>
+              User Question: "${query}"
+            </input>
+            <instruction>
+              - Extract the transaction details from the input.
+              - Answer the user question ONLY based on the relevant transaction data (if there's need data).
+              - If there are calculations (total spending, average, etc), calculate them accurately based on the data.
+              - Provide the answer in a neat, professional, yet easy-to-understand markdown format.
+              - If there is no relevant data at all, state that the data is not availble in the history.
+              - If user question is general and not need a data, response generally.
+              - The final response if there are no more functions being called is as simple as possible.
+            </instruction>
+            <context>
+              Current Date : ${new Date().toISOString()}
+            </context>
+            <constraints>
+              - Answer in relaxed, polite but professional in Indonesian.
+              - Don't make assumptions about data from users if they don't mention it.
+              - If there are questions outside the context related to finance, you must only answer questions related to finance.
+              - Don't answer in table format instead of markdown.
+            </contraints>
+          `,
+          },
+        ],
+      },
+    ];
+
+    let running = true;
+    let iterate = 1;
+    while (running) {
+      iterate++;
+      const response = await ai.models.generateContentStream({
+        model: "gemini-3.5-flash",
+        contents,
+        config: {
+          tools: [{ functionDeclarations: [getTransactionDeclaration] }],
+          thinkingConfig: {
+            includeThoughts: isThinking,
+          },
+        },
+      });
+
+      const modelParts: Part[] = [];
+      const functionCalls: FunctionCall[] = [];
+
+      for await (const chunk of response) {
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        if (parts) {
+          for (const part of parts) {
+            modelParts.push(part);
+            if (part.functionCall) {
+              functionCalls.push(part.functionCall);
+            } else if (part.text) {
+              if (part.thought) {
+                if (isThinking) yield `[thought]${part.text}`;
+              } else {
+                yield part.text;
+              }
+            }
+          }
+        }
+      }
+
+      if (functionCalls.length > 0) {
+        contents.push({ role: "model", parts: modelParts });
+        const functionResponseParts = await Promise.all(
+          functionCalls.map(async (functionCall) => {
+            const { name, args, id } = functionCall;
+            if (!args) {
+              throw new Error("No arguments provided for action");
+            }
+
+            let resultData = {};
+
+            switch (name) {
+              case "get_transaction":
+                const dataFind = await findEmbedding(
+                  JSON.stringify(args),
+                  0.3,
+                  100,
+                );
+                resultData = dataFind || [];
+                break;
+              default:
+                throw new Error(`Unknown function call`);
+            }
+
+            return {
+              functionResponse: {
+                name,
+                response: { result: resultData },
+                id,
+              },
+            };
+          }),
+        );
+        contents.push({
+          role: "user",
+          parts: functionResponseParts,
+        });
+      } else {
+        running = false;
+      }
+    }
   }
 }
