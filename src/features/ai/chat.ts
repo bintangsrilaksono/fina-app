@@ -3,7 +3,13 @@
 import { Conversation } from "@/app/types/ai";
 import { createAI } from "./instance";
 import { findEmbedding, generateEmbedding } from "./embedding";
-import { Content, FunctionCall, Part } from "@google/genai";
+import {
+  Content,
+  FunctionCall,
+  HarmBlockThreshold,
+  HarmCategory,
+  Part,
+} from "@google/genai";
 import { getTransactionDeclaration } from "./function-transaction";
 
 export async function handleChat(
@@ -64,6 +70,12 @@ async function generalChat(conversation: Content[], isThinking?: boolean) {
           urlContext: {},
         },
       ],
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+          threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+        },
+      ],
       systemInstruction: `
       [Role]
       Kamu adalah Finabot seorang financial advisor, yang punya gaya bahasa sopan dan suka
@@ -77,17 +89,12 @@ async function generalChat(conversation: Content[], isThinking?: boolean) {
       dengan penghasilan (Rp 30.000.000 - Rp 60.000.000). Kebanyakan dari mereka mulai memikirkan investasi.
       
       [Input]
-      Pengguna akan menanyakan seputar menabung, investasi, pengelolaan utang, dana darurat, keputusan membeli suatu barang/produk
-      dikaitkan dengan budget mereka, atau pertanyaan lain seputar finance.
+      Pengguna akan menanyakan seputar menabung, investasi, pengelolaan utang, dana darurat atau pertanyaan lain seputar finance.
 
       [Constraints]
       - Jawab dengan bahasa Indonesia yang santai, sopan namun tetap profesional.
       - Jangan membuat asumsi tentang data dari pengguna jika mereka tidak menyebutkannya.
-      - Jika pengguna bertanya soal harga atau rekomendasi produk/barang (misal gadget, kendaraan) dikaitkan dengan budget atau
-        keputusan membeli, gunakan googleSearch/urlContext untuk mencari info harga terkini, lalu bantu analisis mana pilihan yang
-        paling sesuai dengan budget mereka. Ini termasuk bidang kamu karena berkaitan dengan keputusan finansial.
-      - Jika ada pertanyaan yang sama sekali tidak berkaitan dengan keuangan atau keputusan finansial (misal politik, hiburan umum,
-        kesehatan), maka kamu jawab bahwa kamu hanya bisa menjawab pertanyaan terkait finance.
+      - Jika ada pertanyaan diluar konteks terkait finance, maka kamu jawab bahwa kamu hanya bisa menjawab pertanyaan terkait finance.
       
       [Workflow Steps]
       - Langkah 1 (Information Extraction): Identifikasi pengguna, tanyakan usia, penghasilan/ budget, tujuan keuangannya.
@@ -117,13 +124,6 @@ async function generalChat(conversation: Content[], isThinking?: boolean) {
       - Stop penggunaan paylater untuk sementara waktu.
       - Dana berlebih pakai untuk melunasi paylater tersebut karena bunga jauh lebih tinggi dari imbal hasil investasi.
       - Setelah lunas baru mulai rutin investasi
-
-      [Contoh 3]
-      User: "Saya punya budget 15 juta, mau beli iPhone apa rekomendasi kamu?"
-      Model: "Dengan budget 15 juta, ada beberapa pilihan iPhone yang worth it dan tetap menyisakan dana.
-      Berikut rekomendasinya (harga dicari lewat googleSearch/urlContext ke situs resmi seperti iBox):
-      - Sebutkan 2-3 pilihan model beserta harga terkini dan alasan singkat kenapa cocok dengan budget tersebut.
-      - Ingatkan agar tetap menyisihkan sebagian budget untuk kebutuhan darurat/tabungan, jangan habis semua untuk pembelian."
       `,
       // sampling params
       temperature: 0.2,
@@ -175,7 +175,7 @@ export async function* handleChatStreaming(
     const historyChat = conversation.slice(0, -1);
     const ai = createAI();
 
-    const contents: Content[] = [
+    let contents: Content[] = [
       ...historyChat,
       {
         role: "user",
@@ -220,10 +220,25 @@ export async function* handleChatStreaming(
         model: "gemini-3.5-flash",
         contents,
         config: {
-          tools: [{ functionDeclarations: [getTransactionDeclaration] }],
+          tools: [
+            {
+              // googleSearch: {},
+              // urlContext: {},
+              functionDeclarations: [getTransactionDeclaration],
+            },
+          ],
+          // toolConfig: {
+          //   includeServerSideToolInvocations: true,
+          // },
           thinkingConfig: {
             includeThoughts: isThinking,
           },
+          safetySettings: [
+            {
+              category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+              threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            },
+          ],
         },
       });
 
